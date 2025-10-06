@@ -1,8 +1,11 @@
 from flask import Flask, request, jsonify
 import requests
 from textblob import TextBlob
+from flask_cors import CORS   # ✅ NEW
 
 app = Flask(__name__)
+CORS(app)  # ✅ Enable CORS for all routes
+
 
 # Your n8n webhook URL (production URL!)
 N8N_WEBHOOK = "https://owl-winning-legally.ngrok-free.app/webhook/sentiment"
