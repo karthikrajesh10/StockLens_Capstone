@@ -1,13 +1,14 @@
 from flask import Flask, request, jsonify
 import requests
 from textblob import TextBlob
-from flask_cors import CORS   # ✅ NEW
+from flask_cors import CORS
+from modules.summarizer import generate_summary   # 🧠 NEW
+from modules.tts_generator import generate_audio   # 🔊 NEW
 
 app = Flask(__name__)
-CORS(app)  # ✅ Enable CORS for all routes
+CORS(app)  # Enable CORS for all routes
 
-
-# Your n8n webhook URL (production URL!)
+# Your n8n webhook URL (production URL)
 N8N_WEBHOOK = "https://owl-winning-legally.ngrok-free.app/webhook/sentiment"
 
 def analyze_sentiment(text):
@@ -24,12 +25,12 @@ def analyze_sentiment(text):
 
 @app.route("/api/sentiment", methods=["GET"])
 def get_sentiment():
-    # 1️⃣ Read stock symbol from query
+    """Fetch stock news from n8n, analyze sentiment, summarize, and generate audio."""
     symbol = request.args.get("stock", "")
     if not symbol:
         return jsonify({"error": "Please provide a stock symbol, e.g., ?stock=INFY"}), 400
 
-    # 2️⃣ Call n8n webhook
+    # 1️⃣ Fetch news from n8n webhook
     n8n_url = f"{N8N_WEBHOOK}?stock={symbol}"
     response = requests.get(n8n_url)
 
@@ -38,46 +39,55 @@ def get_sentiment():
 
     data = response.json()
 
-    # 3️⃣ If response is wrapped in a list, unwrap it
+    # 2️⃣ Unwrap if it's a list
     if isinstance(data, list) and len(data) > 0:
         data = data[0]
 
-    # 4️⃣ Force set symbol from query parameter
+    # 3️⃣ Ensure symbol is consistent
     data["symbol"] = symbol.upper()
 
-    # 5️⃣ Analyze sentiment for each article
+    # 4️⃣ Perform sentiment analysis
     for article in data.get("articles", []):
         combined_text = f"{article['headline']} {article['summary']}"
         sentiment, score = analyze_sentiment(combined_text)
         article["sentiment"] = sentiment
         article["score"] = score
 
-    # 6️⃣ Calculate overall sentiment summary
-    sentiments = [article["sentiment"] for article in data.get("articles", [])]
-    positive = sentiments.count("Positive")
-    negative = sentiments.count("Negative")
-    neutral = sentiments.count("Neutral")
+    # 5️⃣ Compute overall sentiment
+    sentiments = [a["sentiment"] for a in data.get("articles", [])]
+    pos, neg, neu = sentiments.count("Positive"), sentiments.count("Negative"), sentiments.count("Neutral")
     total = len(sentiments)
 
     overall = "Positive"
-    if negative > positive:
+    if neg > pos:
         overall = "Negative"
-    elif positive == negative:
+    elif pos == neg:
         overall = "Neutral"
 
     data["overall_sentiment"] = {
-        "positive_articles": positive,
-        "negative_articles": negative,
-        "neutral_articles": neutral,
+        "positive_articles": pos,
+        "negative_articles": neg,
+        "neutral_articles": neu,
         "total_articles": total,
         "overall": overall
     }
+
+    # 6️⃣ Generate LLM-based summary and TTS audio
+    try:
+        summary_text = generate_summary(data.get("articles", []))
+        audio_path = generate_audio(summary_text, symbol)
+        data["summary_text"] = summary_text
+        data["audio_url"] = audio_path
+    except Exception as e:
+        data["summary_text"] = "Summary generation failed."
+        data["audio_url"] = None
+        print("⚠️ LLM or TTS Error:", e)
 
     return jsonify(data)
 
 @app.route("/")
 def home():
-    return "✅ Backend is running! Use /api/sentiment?stock=INFY"
+    return "✅ StockLens Backend is running! Use /api/sentiment?stock=INFY"
 
 if __name__ == "__main__":
     app.run(debug=True)
